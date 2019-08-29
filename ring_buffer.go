@@ -3,7 +3,9 @@ package ringbuffer
 import (
 	"bytes"
 	"errors"
+	"io"
 	"math"
+	"net"
 )
 
 var (
@@ -57,6 +59,38 @@ func (r *RingBuffer) Read(out []byte) (n int, err error) {
 	return 0, nil
 }
 
+func (r *RingBuffer) ReadFromTcpConn(reader io.Reader) (int, error) {
+	_, ok := reader.(*net.TCPConn)
+	if !ok {
+		panic("reader is not a tcp connection")
+	}
+
+	if r.IsFull() {
+		return 0, ErrBufferFull
+	}
+
+	var n int
+	var err error
+
+	end := r.head - 1
+	if end < 0 {
+		end += r.size
+	}
+	if r.tail <= end {
+		n, err = reader.Read(r.data[r.tail:end])
+		r.tail = (r.tail + n) % r.size
+	} else {
+		//这里不想实现得太复杂，所以拷贝一次
+		tmpBuffer := make([]byte, r.Unused())
+		n, err = reader.Read(tmpBuffer)
+		if n > 0 {
+			n, err = r.Write(tmpBuffer[:n])
+		}
+	}
+
+	return n, err
+}
+
 func (r *RingBuffer) NextBytes(n int) (result []byte) {
 	if n >= r.capacity {
 		return r.Bytes()
@@ -74,7 +108,7 @@ func (r *RingBuffer) NextBytes(n int) (result []byte) {
 
 //Consume discard n bytes beginning from r.head, return head's pos in buffer
 func (r *RingBuffer) Consume(n int) int {
-	if n >= r.Used() {
+	if n > r.Used() {
 		r.Reset()
 	} else {
 		if r.tail >= r.head {

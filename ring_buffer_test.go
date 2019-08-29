@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"github.com/stretchr/testify/assert"
 	"io"
+	"log"
 	"math/rand"
+	"net"
 	"testing"
 	"time"
 )
@@ -159,7 +161,7 @@ func TestRingBuffer_Write(t *testing.T) {
 			},
 			args:    args{in: []byte("hello_world aha")},
 			wantN:   10,
-			wantErr: false,
+			wantErr: true,
 		},
 		{
 			name: "write wrap aroud bytes",
@@ -172,7 +174,7 @@ func TestRingBuffer_Write(t *testing.T) {
 			},
 			args:    args{in: []byte("hello_world aha")},
 			wantN:   4,
-			wantErr: false,
+			wantErr: true,
 		},
 		{
 			name: "write wrap aroud bytes",
@@ -185,7 +187,7 @@ func TestRingBuffer_Write(t *testing.T) {
 			},
 			args:    args{in: []byte("hello_world aha")},
 			wantN:   2,
-			wantErr: false,
+			wantErr: true,
 		},
 	}
 	for _, tt := range tests {
@@ -279,7 +281,7 @@ func TestRingBuffer_Consume1(t *testing.T) {
 				tail:       4,
 				capacity:   10,
 				rightLimit: 11,
-				data:       []byte("1234567890"),
+				data:       []byte("1234567890a"),
 			},
 			args: args{n: 7},
 			want: 4,
@@ -428,7 +430,7 @@ func TestRingBuffer_Consume4(t *testing.T) {
 }
 
 func TestRingBuffer_Consume(t *testing.T) {
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 200; i++ {
 		bufferCap := randomRange(200, 8192)
 		readOneTime := randomRange(10, 2000)
 		randomTest(t, bufferCap, readOneTime)
@@ -436,12 +438,12 @@ func TestRingBuffer_Consume(t *testing.T) {
 }
 
 func randomTest(t *testing.T, bufferCap int, readLenOneTime int) {
+	fmt.Printf("bufferCap: %d, readLenOneTime: %d\n", bufferCap, readLenOneTime)
 	rb := NewRingBuffer(bufferCap)
 	ctx, _ := context.WithCancel(context.Background())
 
 	reader := newTestJsonReader(ctx, readLenOneTime)
 
-BigLoop:
 	for {
 
 		tmpBuffer := make([]byte, rb.Unused())
@@ -449,39 +451,7 @@ BigLoop:
 		_, _ = rb.Write(tmpBuffer[:n])
 		//fmt.Printf("n:%d, err:%+v, content:%v\n", n, err, rb.Bytes())
 
-		for !rb.IsEmpty() {
-			//fmt.Printf("remained len:%d content:%v\n", rb.Used(), rb.Bytes())
-			if rb.Used() < 5 {
-				//fmt.Printf("no more than 5 bytes\n")
-				break
-			}
-
-			header := rb.NextBytes(5)
-			if header[0] != '(' {
-				t.Errorf("start flag wrong, %v\n", rb.Bytes())
-				break BigLoop
-			}
-
-			dataLen := int(binary.LittleEndian.Uint32(header[1:5]))
-			if rb.Used() < dataLen {
-				//fmt.Printf("no more than datalen(%d) bytes\n", dataLen)
-				break
-			}
-
-			packet := rb.NextBytes(dataLen)
-			if packet[dataLen-1] != ')' {
-				t.Errorf("end flag wrong, '%c'\n", packet[dataLen-1])
-				break BigLoop
-			}
-
-			if !json.Valid(packet[5 : dataLen-1]) {
-				t.Errorf("parse json wrong, %v\n", packet[5:dataLen-1])
-				break BigLoop
-			}
-
-			rb.Consume(dataLen)
-			//fmt.Printf("consume datalen:%d, head:%d, tail:%d, remainLen:%d\n", dataLen, rb.head, rb.tail, rb.Used())
-		}
+		parseJsonJoinString(rb)
 
 		if err == io.EOF {
 			fmt.Println("reader drained")
@@ -499,4 +469,112 @@ func randomRange(left, right int) int {
 		r = rand.Intn(right)
 	}
 	return r
+}
+
+func parseJsonJoinString(rb *RingBuffer) {
+	for !rb.IsEmpty() {
+		//fmt.Printf("remained len:%d content:%v\n", rb.Used(), rb.Bytes())
+		if rb.Used() < 5 {
+			fmt.Printf("no more than 5 bytes, content:%+v\n", rb.Bytes())
+			break
+		}
+
+		header := rb.NextBytes(5)
+		if header[0] != '(' {
+			log.Printf("start flag wrong, %v\n", rb.Bytes())
+			break
+		}
+
+		dataLen := int(binary.LittleEndian.Uint32(header[1:5]))
+		if rb.Used() < dataLen {
+			fmt.Printf("no more than datalen(%d) bytes, content:%+v\n", dataLen, rb.Bytes())
+			break
+		}
+
+		packet := rb.NextBytes(dataLen)
+		if packet[dataLen-1] != ')' {
+			log.Printf("end flag wrong, '%c'\n", packet[dataLen-1])
+			break
+		}
+
+		if !json.Valid(packet[5 : dataLen-1]) {
+			log.Printf("parse json wrong, %v\n", packet[5:dataLen-1])
+			break
+		}
+
+		rb.Consume(dataLen)
+		fmt.Printf("consume datalen:%d, head:%d, tail:%d, remainLen:%d\n", dataLen, rb.head, rb.tail, rb.Used())
+	}
+}
+
+func TestRingBuffer_ReadFromTcpConn(t *testing.T) {
+	go func() {
+		ln, err := net.Listen("tcp", ":10086")
+		if err != nil {
+			panic("listen on 10086 failed")
+		}
+		defer ln.Close()
+
+		tcpConn, err := ln.Accept()
+		if err == nil {
+			go func(conn net.Conn) {
+				defer conn.Close()
+				rb := NewRingBuffer(1024)
+				for {
+					_ = conn.SetReadDeadline(time.Now().Add(time.Millisecond * 200))
+					n, err := rb.ReadFromTcpConn(conn)
+
+					if n > 0 {
+						fmt.Printf("n: %d, length: %d, rb content: %v\n", n, rb.Used(), rb.Bytes())
+						parseJsonJoinString(rb)
+					}
+
+					if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
+						//超时，忽略，继续读
+						continue
+					} else if err != nil {
+						fmt.Printf("err: %+v, conn closed\n", err)
+						return
+					}
+				}
+			}(tcpConn)
+		}
+	}()
+
+	time.Sleep(time.Second * 2)
+
+	go func() {
+		conn, err := net.Dial("tcp", ":10086")
+		if err != nil {
+			panic(fmt.Sprintf("dial err: %+v", err))
+		}
+		defer conn.Close()
+
+		timer := time.NewTimer(time.Second * 30)
+		sender := newTestJsonReader(context.Background(), 2000)
+		sendBuffer := make([]byte, 2000)
+	SendLoop:
+		for {
+			select {
+			case <-timer.C:
+				break SendLoop
+			default:
+				n, err := sender.Read(sendBuffer)
+				fmt.Printf("client send, n:%d, err:%+v\n", n, err)
+				if n > 0 {
+					_, nerr := conn.Write(sendBuffer[:n])
+					if nerr != nil {
+						fmt.Printf("send err:%+v\n", nerr)
+					}
+				}
+				if err != nil {
+					break SendLoop
+				}
+				time.Sleep(time.Second)
+			}
+		}
+		fmt.Printf("client closed\n")
+	}()
+
+	<-context.Background().Done()
 }
