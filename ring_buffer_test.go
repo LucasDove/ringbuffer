@@ -191,11 +191,11 @@ func TestRingBuffer_Write(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := &RingBuffer{
-				head:       tt.fields.head,
-				tail:       tt.fields.tail,
-				capacity:   tt.fields.capacity,
-				rightLimit: tt.fields.rightLimit,
-				data:       tt.fields.data,
+				head:     tt.fields.head,
+				tail:     tt.fields.tail,
+				capacity: tt.fields.capacity,
+				size:     tt.fields.rightLimit,
+				data:     tt.fields.data,
 			}
 			gotN, err := r.Write(tt.args.in)
 			if (err != nil) != tt.wantErr {
@@ -288,11 +288,11 @@ func TestRingBuffer_Consume1(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := &RingBuffer{
-				head:       tt.fields.head,
-				tail:       tt.fields.tail,
-				capacity:   tt.fields.capacity,
-				rightLimit: tt.fields.rightLimit,
-				data:       tt.fields.data,
+				head:     tt.fields.head,
+				tail:     tt.fields.tail,
+				capacity: tt.fields.capacity,
+				size:     tt.fields.rightLimit,
+				data:     tt.fields.data,
 			}
 			if got := r.Consume(tt.args.n); got != tt.want {
 				t.Errorf("Consume() = %v, want %v", got, tt.want)

@@ -7,24 +7,22 @@ import (
 )
 
 var (
-	ErrNegativeRead = errors.New("RingBuffer: reader returned negative count from Read")
-	ErrBufferFull   = errors.New("RingBuffer: Buffer is full")
+	ErrBufferFull = errors.New("RingBuffer: Buffer is full")
 )
 
 type RingBuffer struct {
-	head       int
-	tail       int
-	capacity   int
-	rightLimit int
-
-	data []byte
+	head     int
+	tail     int
+	capacity int //buffer的容量，又构造函数指定
+	size     int //size指data切片的长度，它等于capacity + 1
+	data     []byte
 }
 
 func NewRingBuffer(capacity int) *RingBuffer {
 	return &RingBuffer{
-		capacity:   capacity,
-		rightLimit: capacity + 1,
-		data:       make([]byte, capacity+1),
+		capacity: capacity,
+		size:     capacity + 1,
+		data:     make([]byte, capacity+1),
 	}
 }
 
@@ -34,17 +32,17 @@ func (r *RingBuffer) Write(in []byte) (n int, err error) {
 	}
 	end := r.head - 1
 	if end < 0 {
-		end += r.rightLimit
+		end += r.size
 	}
 	if r.tail <= end {
 		n += copy(r.data[r.tail:end], in)
 	} else {
-		n += copy(r.data[r.tail:r.rightLimit], in)
+		n += copy(r.data[r.tail:r.size], in)
 		if len(in) > n {
 			n += copy(r.data[0:end], in[n:])
 		}
 	}
-	r.tail = (r.tail + n) % r.rightLimit
+	r.tail = (r.tail + n) % r.size
 
 	if n < len(in) {
 		err = ErrBufferFull
@@ -64,10 +62,10 @@ func (r *RingBuffer) NextBytes(n int) (result []byte) {
 		return r.Bytes()
 	}
 	end := r.head + n
-	rightLimit := int(math.Min(float64(end), float64(r.rightLimit)))
+	rightLimit := int(math.Min(float64(end), float64(r.size)))
 	result = r.data[r.head:rightLimit]
-	if end > r.rightLimit {
-		end -= r.rightLimit
+	if end > r.size {
+		end -= r.size
 		rightLimit = int(math.Min(float64(end), float64(r.tail)))
 		result = append(result, r.data[0:rightLimit]...)
 	}
@@ -83,11 +81,11 @@ func (r *RingBuffer) Consume(n int) int {
 			r.head = int(math.Min(float64(r.tail), float64(r.head+n)))
 		} else {
 			end := r.head + n
-			if end >= r.rightLimit {
-				end = end % r.rightLimit
+			if end >= r.size {
+				end = end % r.size
 				r.head = int(math.Min(float64(end), float64(r.head)))
 			} else {
-				r.head = int(math.Min(float64(end), float64(r.rightLimit)))
+				r.head = int(math.Min(float64(end), float64(r.size)))
 			}
 		}
 	}
@@ -99,7 +97,7 @@ func (r *RingBuffer) Bytes() []byte {
 		return r.data[r.head:r.tail]
 	} else {
 		var buf bytes.Buffer
-		buf.Write(r.data[r.head:r.rightLimit])
+		buf.Write(r.data[r.head:r.size])
 		buf.Write(r.data[0:r.tail])
 		return buf.Bytes()
 	}
