@@ -1,4 +1,4 @@
-module ringbuffer
+module github.com/LucasDove/ringbuffer
 
 go 1.12
 
